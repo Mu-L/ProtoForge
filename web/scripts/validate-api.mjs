@@ -1,34 +1,32 @@
 import { readFileSync, readdirSync, statSync } from "fs";
 import { join, extname, relative } from "path";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
 
-interface OpenAPIPath {
-  [method: string]: {
-    operationId?: string;
-    summary?: string;
-    tags?: string[];
-  };
-}
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
-interface OpenAPISpec {
-  paths: Record<string, OpenAPIPath>;
-  info?: { title?: string; version?: string };
-}
+/**
+ * @typedef {{ [method: string]: { operationId?: string, summary?: string, tags?: string[] } }} OpenAPIPath
+ * @typedef {{ paths: Record<string, OpenAPIPath>, info?: { title?: string, version?: string } }} OpenAPISpec
+ * @typedef {{ file: string, line: number, method: string, endpoint: string, message: string }} ValidationError
+ */
 
-interface ValidationError {
-  file: string;
-  line: number;
-  method: string;
-  endpoint: string;
-  message: string;
-}
-
-function loadOpenAPISpec(specPath: string): OpenAPISpec {
+/**
+ * @param {string} specPath
+ * @returns {OpenAPISpec}
+ */
+function loadOpenAPISpec(specPath) {
   const raw = readFileSync(specPath, "utf-8");
-  return JSON.parse(raw) as OpenAPISpec;
+  return JSON.parse(raw);
 }
 
-function buildEndpointSet(spec: OpenAPISpec): Set<string> {
-  const endpoints = new Set<string>();
+/**
+ * @param {OpenAPISpec} spec
+ * @returns {Set<string>}
+ */
+function buildEndpointSet(spec) {
+  const endpoints = new Set();
   for (const [path, methods] of Object.entries(spec.paths)) {
     for (const method of Object.keys(methods)) {
       endpoints.add(`${method.toUpperCase()} ${path}`);
@@ -37,9 +35,14 @@ function buildEndpointSet(spec: OpenAPISpec): Set<string> {
   return endpoints;
 }
 
-function collectFiles(dir: string, extensions: string[]): string[] {
-  const results: string[] = [];
-  function walk(current: string) {
+/**
+ * @param {string} dir
+ * @param {string[]} extensions
+ * @returns {string[]}
+ */
+function collectFiles(dir, extensions) {
+  const results = [];
+  function walk(current) {
     const entries = readdirSync(current);
     for (const entry of entries) {
       const full = join(current, entry);
@@ -60,15 +63,17 @@ function collectFiles(dir: string, extensions: string[]): string[] {
 const API_CALL_REGEX =
   /api\.(get|post|put|delete|patch|request)\s*\(\s*[`'"]([^`'"]+)[`'"]/g;
 
-function extractApiCalls(
-  content: string,
-  filePath: string
-): { method: string; endpoint: string; line: number }[] {
-  const calls: { method: string; endpoint: string; line: number }[] = [];
+/**
+ * @param {string} content
+ * @param {string} filePath
+ * @returns {{ method: string, endpoint: string, line: number }[]}
+ */
+function extractApiCalls(content, filePath) {
+  const calls = [];
   const lines = content.split("\n");
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    let match: RegExpExecArray | null;
+    let match;
     const regex = new RegExp(API_CALL_REGEX.source, "g");
     while ((match = regex.exec(line)) !== null) {
       let method = match[1].toUpperCase();
@@ -92,7 +97,12 @@ function extractApiCalls(
   return calls;
 }
 
-function resolveEndpoint(basePath: string, rawPath: string): string {
+/**
+ * @param {string} basePath
+ * @param {string} rawPath
+ * @returns {string}
+ */
+function resolveEndpoint(basePath, rawPath) {
   let resolved = rawPath;
   // Always prepend basePath since frontend axios baseURL is /api/v1
   if (!resolved.startsWith(basePath)) {
@@ -106,16 +116,40 @@ function resolveEndpoint(basePath: string, rawPath: string): string {
   return resolved;
 }
 
-function main(): void {
+/**
+ * @param {string} specEndpoint
+ * @param {string} lookupEndpoint
+ * @returns {boolean}
+ */
+function matchWithParams(specEndpoint, lookupEndpoint) {
+  const specParts = specEndpoint.split(" ");
+  const lookupParts = lookupEndpoint.split(" ");
+  if (specParts.length !== 2 || lookupParts.length !== 2) return false;
+  if (specParts[0] !== lookupParts[0]) return false;
+
+  const specSegments = specParts[1].split("/");
+  const lookupSegments = lookupParts[1].split("/");
+  if (specSegments.length !== lookupSegments.length) return false;
+
+  for (let i = 0; i < specSegments.length; i++) {
+    if (specSegments[i].startsWith("{") && specSegments[i].endsWith("}")) {
+      continue;
+    }
+    if (specSegments[i] !== lookupSegments[i]) return false;
+  }
+  return true;
+}
+
+function main() {
   const projectRoot = join(__dirname, "..", "..");
   const specPath = join(projectRoot, "openapi.json");
   const webSrcDir = join(__dirname, "..", "src");
 
-  let spec: OpenAPISpec;
+  let spec;
   try {
     spec = loadOpenAPISpec(specPath);
   } catch (e) {
-    console.error(`Failed to load openapi.json from ${specPath}: ${(e as Error).message}`);
+    console.error(`Failed to load openapi.json from ${specPath}: ${e.message}`);
     process.exit(1);
   }
 
@@ -123,8 +157,7 @@ function main(): void {
   const basePath = "/api/v1";
 
   const files = collectFiles(webSrcDir, [".vue", ".ts", ".js"]);
-  const errors: ValidationError[] = [];
-  const warnings: ValidationError[] = [];
+  const errors = [];
 
   console.log(`\n=== ProtoForge API Consistency Check ===\n`);
   console.log(`OpenAPI spec: ${specPath}`);
@@ -178,25 +211,6 @@ function main(): void {
   } else {
     console.log(`✅ All frontend API calls are consistent with backend OpenAPI spec.\n`);
   }
-}
-
-function matchWithParams(specEndpoint: string, lookupEndpoint: string): boolean {
-  const specParts = specEndpoint.split(" ");
-  const lookupParts = lookupEndpoint.split(" ");
-  if (specParts.length !== 2 || lookupParts.length !== 2) return false;
-  if (specParts[0] !== lookupParts[0]) return false;
-
-  const specSegments = specParts[1].split("/");
-  const lookupSegments = lookupParts[1].split("/");
-  if (specSegments.length !== lookupSegments.length) return false;
-
-  for (let i = 0; i < specSegments.length; i++) {
-    if (specSegments[i].startsWith("{") && specSegments[i].endsWith("}")) {
-      continue;
-    }
-    if (specSegments[i] !== lookupSegments[i]) return false;
-  }
-  return true;
 }
 
 main();
