@@ -38,16 +38,16 @@ jobs:
       - name: Install optional dependencies (best-effort)
         run: pip install -e ".[opcua,mqtt,postgres,grpc]" || echo "WARNING: Some optional dependencies failed to install"  # FIXED: install optional deps separately, allow failure
       - name: Run Unit Tests
-        run: python -m pytest tests/ -v --tb=short || true  # FIXED: don't fail CI on test failures during transition
+        run: python -m pytest tests/ -v --tb=short --override-ini="addopts=" || true  # FIXED: don't fail CI on test failures during transition
 
   build-frontend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - name: Set up Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
       - name: Install frontend dependencies
         working-directory: web
         run: npm install
